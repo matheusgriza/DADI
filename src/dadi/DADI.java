@@ -10,6 +10,7 @@ package dadi;
  */
 public class DADI {
     private static String nombre = "Matheus";
+    private static int num = 10;
     /**
      * @param args the command line arguments
      */

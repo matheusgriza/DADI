@@ -123,12 +123,21 @@ public class FTPConnectionManager {
         throw new IOException("Debes autenticarte antes de listar archivos.");
     }
 
-    // Enviar comando PASV
+    // Establecer protección para el canal de datos
+    sendCommand("PROT P");
+    String protResponse = readResponse();
+    System.out.println("Respuesta PROT P: " + protResponse);
+
+    if (!protResponse.startsWith("200")) {
+        throw new IOException("El servidor no aceptó PROT P: " + protResponse);
+    }
+
+    // Cambiar a modo pasivo
     sendCommand("PASV");
     String pasvResponse = readResponse();
     System.out.println("Respuesta PASV: " + pasvResponse);
 
-    // Crear el socket de datos a partir de la respuesta PASV
+    // Crear el socket de datos
     Socket dataSocket = createDataSocket(pasvResponse);
 
     // Enviar comando LIST
@@ -136,20 +145,40 @@ public class FTPConnectionManager {
     String listResponse = readResponse();
     System.out.println("Respuesta LIST: " + listResponse);
 
-    // Leer la lista de archivos desde el socket de datos
+    if (!listResponse.startsWith("150")) {
+        throw new IOException("El servidor no inició la transferencia: " + listResponse);
+    }
+
+    // Leer los datos del socket
     List<String> files = new ArrayList<>();
     try (BufferedReader dataReader = new BufferedReader(new InputStreamReader(dataSocket.getInputStream()))) {
         String line;
         while ((line = dataReader.readLine()) != null) {
+            System.out.println("Archivo encontrado: " + line);
             files.add(line);
         }
+    } catch (IOException e) {
+        throw new IOException("Error al leer los datos del socket: " + e.getMessage(), e);
+    } finally {
+        // Asegúrate de cerrar el socket de datos
+        if (dataSocket != null && !dataSocket.isClosed()) {
+            dataSocket.close();
+        }
     }
-    dataSocket.close();
 
-    // Leer la respuesta final del servidor después de cerrar el socket de datos
-    readResponse();
+    // Leer la respuesta final del servidor
+    String finalResponse = readResponse();
+    System.out.println("Respuesta final después de LIST: " + finalResponse);
+
+    if (!finalResponse.startsWith("226")) {
+        throw new IOException("El servidor no completó correctamente la transferencia: " + finalResponse);
+    }
+
     return files;
 }
+
+
+
 
     private Socket createDataSocket(String response) throws IOException {
     try {

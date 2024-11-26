@@ -131,14 +131,13 @@ public class MenuUsuario {
             ftpManager.login(selectedConfig.getUsername(), selectedConfig.getPassword());
 
             System.out.println("Archivos en el directorio raíz:");
-            List<String> files = ftpManager.listFiles();
-            files.forEach(System.out::println);
+            ftpManager.listFiles();
+            
 
             ftpManager.disconnect();
         } catch (Exception e) {
             System.out.println("Error al conectar al servidor FTP: " + e.getMessage());
         }
     }
-    
     
 }

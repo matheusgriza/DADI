@@ -1,11 +1,7 @@
 package dadi;
 
-import javax.net.ssl.*;
 import java.io.*;
 import java.net.*;
-import java.security.cert.X509Certificate;
-import java.util.ArrayList;
-import java.util.List;
 
 public class FTPConnectionManager {
     private Socket controlSocket;
@@ -14,69 +10,25 @@ public class FTPConnectionManager {
     private boolean isLoggedIn = false;
 
     public void connect(String server, int port) throws IOException {
-    try {
-        // Crear un socket sin cifrar para conectarse al servidor
-        controlSocket = new Socket(server, port);
-        reader = new BufferedReader(new InputStreamReader(controlSocket.getInputStream()));
-        writer = new BufferedWriter(new OutputStreamWriter(controlSocket.getOutputStream()));
+        try {
+            // Crear un socket simple para conectarse al servidor FTP
+            controlSocket = new Socket(server, port);
+            reader = new BufferedReader(new InputStreamReader(controlSocket.getInputStream()));
+            writer = new BufferedWriter(new OutputStreamWriter(controlSocket.getOutputStream()));
 
-        // Leer todo el mensaje de bienvenida
-        String line;
-        while ((line = reader.readLine()) != null) {
-            System.out.println("Mensaje de bienvenida: " + line);
-            if (line.startsWith("220 ")) { // Fin del mensaje de bienvenida
-                break;
-            }
-        }
-
-        // Enviar comando AUTH TLS
-        sendCommand("AUTH TLS");
-        String authResponse = readResponse();
-        System.out.println("Respuesta AUTH TLS: " + authResponse);
-
-        // Verificar que el servidor aceptó TLS
-        if (!authResponse.startsWith("234")) {
-            throw new IOException("El servidor no aceptó AUTH TLS: " + authResponse);
-        }
-
-        // Establecer la conexión TLS confiando en todos los certificados
-        trustAllCertificates();
-
-    } catch (Exception e) {
-        throw new IOException("Error al establecer la conexión segura: " + e.getMessage(), e);
-    }
-}
-
-
-    private void trustAllCertificates() throws Exception {
-        // Configurar un gestor de confianza que acepte todos los certificados
-        TrustManager[] trustAllCerts = new TrustManager[] {
-            new X509TrustManager() {
-                public X509Certificate[] getAcceptedIssuers() {
-                    return null;
+            // Leer el mensaje de bienvenida
+            String line;
+            while ((line = reader.readLine()) != null) {
+                System.out.println("Mensaje de bienvenida: " + line);
+                if (line.startsWith("220 ")) { // Fin del mensaje de bienvenida
+                    break;
                 }
-                public void checkClientTrusted(X509Certificate[] certs, String authType) {}
-                public void checkServerTrusted(X509Certificate[] certs, String authType) {}
             }
-        };
 
-        // Inicializar el contexto SSL
-        SSLContext sc = SSLContext.getInstance("TLS");
-        sc.init(null, trustAllCerts, new java.security.SecureRandom());
-        SSLSocketFactory sslSocketFactory = sc.getSocketFactory();
-
-        // Crear un socket seguro
-        SSLSocket sslSocket = (SSLSocket) sslSocketFactory.createSocket(controlSocket, controlSocket.getInetAddress().getHostAddress(), controlSocket.getPort(), true);
-
-        // Configurar el uso de TLS 1.3
-        sslSocket.setEnabledProtocols(new String[]{"TLSv1.3"});
-
-        // Actualizar el lector y escritor para el socket seguro
-        controlSocket = sslSocket;
-        reader = new BufferedReader(new InputStreamReader(controlSocket.getInputStream()));
-        writer = new BufferedWriter(new OutputStreamWriter(controlSocket.getOutputStream()));
-
-        System.out.println("Conexión TLS establecida.");
+            System.out.println("Conexión establecida con el servidor FTP.");
+        } catch (Exception e) {
+            throw new IOException("Error al conectar al servidor FTP: " + e.getMessage(), e);
+        }
     }
 
     public void login(String username, String password) throws IOException {
@@ -104,6 +56,7 @@ public class FTPConnectionManager {
         sendCommand("QUIT");
         readResponse();
         controlSocket.close();
+        System.out.println("Conexión cerrada.");
     }
 
     private void sendCommand(String command) throws IOException {
@@ -117,94 +70,304 @@ public class FTPConnectionManager {
         System.out.println("Respuesta del servidor: " + response);
         return response;
     }
-    
-    public List<String> listFiles() throws IOException {
+
+    public void listFiles() throws IOException {
     if (!isLoggedIn) {
-        throw new IOException("Debes autenticarte antes de listar archivos.");
+        throw new IllegalStateException("Debes iniciar sesión primero.");
     }
 
-    // Establecer protección para el canal de datos
-    sendCommand("PROT P");
-    String protResponse = readResponse();
-    System.out.println("Respuesta PROT P: " + protResponse);
+    Socket dataSocket = null;
+    BufferedReader dataReader = null;
 
-    if (!protResponse.startsWith("200")) {
-        throw new IOException("El servidor no aceptó PROT P: " + protResponse);
-    }
+    try {
+        // 1. Configurar modo pasivo extendido (EPSV)
+        sendCommand("EPSV");
+        String epsvResponse = readResponse();
+        if (!epsvResponse.startsWith("229")) {
+            throw new IOException("Respuesta de modo pasivo desconocida: " + epsvResponse);
+        }
+        System.out.println("Respuesta EPSV: " + epsvResponse);
 
-    // Cambiar a modo pasivo
-    sendCommand("PASV");
-    String pasvResponse = readResponse();
-    System.out.println("Respuesta PASV: " + pasvResponse);
+        // 2. Extraer IP y puerto del canal de datos
+        String[] pasvData = extractPassiveModeData(epsvResponse);
+        String dataIP = pasvData[0];
+        int dataPort = Integer.parseInt(pasvData[1]);
 
-    // Crear el socket de datos
-    Socket dataSocket = createDataSocket(pasvResponse);
+        // 3. Abrir canal de datos
+        dataSocket = new Socket(dataIP, dataPort);
+        System.out.println("Canal de datos abierto en: " + dataIP + ":" + dataPort);
 
-    // Enviar comando LIST
-    sendCommand("LIST");
-    String listResponse = readResponse();
-    System.out.println("Respuesta LIST: " + listResponse);
+        // 4. Enviar el comando LIST
+        sendCommand("LIST");
 
-    if (!listResponse.startsWith("150")) {
-        throw new IOException("El servidor no inició la transferencia: " + listResponse);
-    }
+        // 5. Leer respuesta 150 (inicio de transferencia)
+        String listResponse = readResponse();
+        if (!listResponse.startsWith("150")) {
+            throw new IOException("Error al iniciar el comando LIST: " + listResponse);
+        }
+        System.out.println("Respuesta LIST: " + listResponse);
 
-    // Leer los datos del socket
-    List<String> files = new ArrayList<>();
-    try (BufferedReader dataReader = new BufferedReader(new InputStreamReader(dataSocket.getInputStream()))) {
+        // 6. Leer datos del canal de datos
+        dataReader = new BufferedReader(new InputStreamReader(dataSocket.getInputStream()));
+        System.out.println("Archivos en el directorio actual:");
         String line;
         while ((line = dataReader.readLine()) != null) {
-            System.out.println("Archivo encontrado: " + line);
-            files.add(line);
-        }
-    } catch (IOException e) {
-        throw new IOException("Error al leer los datos del socket: " + e.getMessage(), e);
-    } finally {
-        // Asegúrate de cerrar el socket de datos
-        if (dataSocket != null && !dataSocket.isClosed()) {
-            dataSocket.close();
-        }
-    }
-
-    // Leer la respuesta final del servidor
-    String finalResponse = readResponse();
-    System.out.println("Respuesta final después de LIST: " + finalResponse);
-
-    if (!finalResponse.startsWith("226")) {
-        throw new IOException("El servidor no completó correctamente la transferencia: " + finalResponse);
-    }
-
-    return files;
-}
-
-
-
-
-    private Socket createDataSocket(String response) throws IOException {
-    try {
-        // Extraer los números entre paréntesis de la respuesta PASV
-        int start = response.indexOf('(');
-        int end = response.indexOf(')');
-        if (start == -1 || end == -1) {
-            throw new IOException("Respuesta PASV inválida: " + response);
+            System.out.println(line);
         }
 
-        // Dividir los números en partes
-        String[] parts = response.substring(start + 1, end).split(",");
-        if (parts.length != 6) {
-            throw new IOException("Formato inesperado en respuesta PASV: " + response);
+        // 7. Leer respuesta final 226 (fin de transferencia)
+        String finalResponse = readResponse();
+        if (!finalResponse.startsWith("226")) {
+            throw new IOException("Error al completar el comando LIST: " + finalResponse);
         }
+        System.out.println("Respuesta final LIST: " + finalResponse);
 
-        // Construir la dirección IP
-        String host = parts[0] + "." + parts[1] + "." + parts[2] + "." + parts[3];
-        int port = Integer.parseInt(parts[4]) * 256 + Integer.parseInt(parts[5]);
-
-        // Crear y devolver el socket
-        return new Socket(host, port);
     } catch (Exception e) {
-        throw new IOException("Error al analizar la respuesta PASV: " + e.getMessage(), e);
+        throw new IOException("Error al listar archivos: " + e.getMessage(), e);
+    } finally {
+        // 8. Cerrar recursos
+        if (dataReader != null) {
+            try {
+                dataReader.close();
+            } catch (IOException ignored) {}
+        }
+        if (dataSocket != null && !dataSocket.isClosed()) {
+            try {
+                dataSocket.close();
+            } catch (IOException ignored) {}
+        }
     }
 }
 
+
+
+
+    private String[] extractPassiveModeData(String response) {
+        if (response.startsWith("229")) {
+            // Manejo de respuesta EPSV: "229 Entering Extended Passive Mode (|||port|)"
+            int start = response.indexOf("(");
+            int end = response.indexOf(")");
+            if (start == -1 || end == -1) {
+                throw new IllegalStateException("Respuesta EPSV malformada: " + response);
+            }
+
+            String data = response.substring(start + 1, end);
+            String[] parts = data.split("\\|");
+            if (parts.length < 4 || parts[3].isEmpty()) {
+                throw new IllegalStateException("Respuesta EPSV malformada: " + response);
+            }
+
+            String portString = parts[3];
+            int port = Integer.parseInt(portString);
+
+            // Usamos la misma IP del canal de control
+            String ip = controlSocket.getInetAddress().getHostAddress();
+            return new String[]{ip, String.valueOf(port)};
+        } else if (response.startsWith("227")) {
+            // Manejo de respuesta PASV: "227 Entering Passive Mode (h1,h2,h3,h4,p1,p2)"
+            int start = response.indexOf("(");
+            int end = response.indexOf(")");
+            if (start == -1 || end == -1) {
+                throw new IllegalStateException("Respuesta PASV malformada: " + response);
+            }
+
+            String[] parts = response.substring(start + 1, end).split(",");
+            if (parts.length != 6) {
+                throw new IllegalStateException("Respuesta PASV malformada: " + response);
+            }
+
+            String ip = String.join(".", parts[0], parts[1], parts[2], parts[3]);
+            int port = Integer.parseInt(parts[4]) * 256 + Integer.parseInt(parts[5]);
+            return new String[]{ip, String.valueOf(port)};
+        } else {
+            throw new IllegalStateException("Respuesta de modo pasivo desconocida: " + response);
+        }
+    }
+    
+    public void changeDirectory(String directory) throws IOException {
+    sendCommand("CWD " + directory);
+    String response = readResponse();
+    if (!response.startsWith("250")) {
+        throw new IOException("Error al cambiar de directorio: " + response);
+    }
+    System.out.println("Directorio cambiado a: " + directory);
+}
+
+
+public void downloadFile(String remoteFilePath, String localFilePath) throws IOException {
+    if (!isLoggedIn) {
+        throw new IllegalStateException("Debes iniciar sesión primero.");
+    }
+
+    Socket dataSocket = null;
+
+    try {
+        // 1. Configurar modo pasivo extendido (EPSV)
+        sendCommand("EPSV");
+        String epsvResponse = readResponse();
+        if (!epsvResponse.startsWith("229")) {
+            throw new IOException("Respuesta de modo pasivo desconocida: " + epsvResponse);
+        }
+        System.out.println("Respuesta EPSV: " + epsvResponse);
+
+        // 2. Extraer IP y puerto del canal de datos
+        String[] pasvData = extractPassiveModeData(epsvResponse);
+        String dataIP = pasvData[0];
+        int dataPort = Integer.parseInt(pasvData[1]);
+
+        // 3. Abrir el canal de datos
+        dataSocket = new Socket(dataIP, dataPort);
+        System.out.println("Canal de datos abierto en: " + dataIP + ":" + dataPort);
+
+        // 4. Enviar comando RETR para descargar el archivo
+        sendCommand("RETR " + remoteFilePath);
+        String response = readResponse();
+        if (!response.startsWith("150")) {
+            throw new IOException("Error al iniciar la descarga del archivo: " + response);
+        }
+        System.out.println("Respuesta RETR: " + response);
+
+        // 5. Guardar el archivo descargado
+        try (InputStream dataInputStream = dataSocket.getInputStream();
+             FileOutputStream fileOutputStream = new FileOutputStream(localFilePath + "/" + new File(remoteFilePath).getName())) {
+
+            byte[] buffer = new byte[1024];
+            int bytesRead;
+            while ((bytesRead = dataInputStream.read(buffer)) != -1) {
+                fileOutputStream.write(buffer, 0, bytesRead);
+            }
+        }
+
+        // 6. Leer respuesta final del servidor
+        String finalResponse = readResponse();
+        if (!finalResponse.startsWith("226")) {
+            throw new IOException("Error al completar la descarga: " + finalResponse);
+        }
+        System.out.println("Archivo descargado exitosamente: " + localFilePath);
+
+    } catch (Exception e) {
+        throw new IOException("Error al descargar el archivo: " + e.getMessage(), e);
+    } finally {
+        // 7. Cerrar el socket de datos
+        if (dataSocket != null && !dataSocket.isClosed()) {
+            try {
+                dataSocket.close();
+            } catch (IOException ignored) {}
+        }
+    }
+}
+
+
+public void uploadFile(String localFilePath, String remoteFilePath) throws IOException {
+    if (!isLoggedIn) {
+        throw new IllegalStateException("Debes iniciar sesión primero.");
+    }
+
+    Socket dataSocket = null;
+
+    try {
+        // 1. Configurar modo pasivo extendido (EPSV)
+        sendCommand("EPSV");
+        String epsvResponse = readResponse();
+        if (!epsvResponse.startsWith("229")) {
+            throw new IOException("Respuesta de modo pasivo desconocida: " + epsvResponse);
+        }
+        System.out.println("Respuesta EPSV: " + epsvResponse);
+
+        // 2. Extraer IP y puerto del canal de datos
+        String[] pasvData = extractPassiveModeData(epsvResponse);
+        String dataIP = pasvData[0];
+        int dataPort = Integer.parseInt(pasvData[1]);
+
+        // 3. Abrir el canal de datos
+        dataSocket = new Socket(dataIP, dataPort);
+        System.out.println("Canal de datos abierto en: " + dataIP + ":" + dataPort);
+
+        // 4. Enviar el comando STOR
+        sendCommand("STOR " + remoteFilePath);
+        String response = readResponse();
+        if (!response.startsWith("150")) {
+            throw new IOException("Error al iniciar la subida del archivo: " + response);
+        }
+        System.out.println("Respuesta STOR: " + response);
+
+        // 5. Enviar el archivo local a través del canal de datos
+        try (FileInputStream fileInputStream = new FileInputStream(localFilePath);
+             OutputStream dataOutputStream = dataSocket.getOutputStream()) {
+
+            byte[] buffer = new byte[1024];
+            int bytesRead;
+            while ((bytesRead = fileInputStream.read(buffer)) != -1) {
+                dataOutputStream.write(buffer, 0, bytesRead);
+            }
+            dataOutputStream.flush();
+        }
+
+        // 6. Leer respuesta final del servidor
+        String finalResponse = readResponse();
+        if (!finalResponse.startsWith("226")) {
+            throw new IOException("Error al completar la subida del archivo: " + finalResponse);
+        }
+        System.out.println("Archivo subido exitosamente: " + remoteFilePath);
+
+    } catch (Exception e) {
+        throw new IOException("Error al subir el archivo: " + e.getMessage(), e);
+    } finally {
+        // 7. Cerrar el canal de datos
+        if (dataSocket != null && !dataSocket.isClosed()) {
+            try {
+                dataSocket.close();
+            } catch (IOException ignored) {}
+        }
+    }
+}
+
+public void createDirectory(String directoryName) throws IOException {
+    sendCommand("MKD " + directoryName);
+    String response = readResponse();
+    if (!response.startsWith("257") && !response.startsWith("226")) {
+        throw new IOException("Error al crear el directorio: " + response);
+    }
+    System.out.println("Directorio creado: " + directoryName);
+}
+
+public void deleteDirectory(String directoryName) throws IOException {
+    sendCommand("RMD " + directoryName);
+    String response = readResponse();
+    if (!response.startsWith("250")) {
+        throw new IOException("Error al eliminar el directorio: " + response);
+    }
+    System.out.println("Directorio eliminado: " + directoryName);
+}
+
+public void rename(String currentName, String newName) throws IOException {
+    sendCommand("RNFR " + currentName);
+    String response = readResponse();
+    if (!response.startsWith("350")) {
+        throw new IOException("Error al renombrar: " + response);
+    }
+
+    sendCommand("RNTO " + newName);
+    response = readResponse();
+    if (!response.startsWith("250")) {
+        throw new IOException("Error al completar el renombrado: " + response);
+    }
+    System.out.println("Archivo o carpeta renombrado de " + currentName + " a " + newName);
+}
+
+private Socket createDataSocket() throws IOException {
+    sendCommand("PASV");
+    String response = readResponse();
+    if (!response.startsWith("227")) {
+        throw new IOException("Error al iniciar conexión PASV: " + response);
+    }
+
+    // Parsear la respuesta PASV para obtener IP y puerto
+    String[] data = extractPassiveModeData(response);
+    String dataIP = data[0];
+    int dataPort = Integer.parseInt(data[1]);
+
+    return new Socket(dataIP, dataPort);
+}
 
 }

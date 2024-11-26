@@ -103,42 +103,129 @@ public class MenuUsuario {
         configManager.addConfiguration(username, config);
         System.out.println("Configuración de servidor FTP guardada exitosamente.");
     }
-
+    
     private void conectarYListarFTP() {
-        List<FTPConfiguration> configs = configManager.getConfigurations(username);
-        if (configs.isEmpty()) {
-            System.out.println("No tiene configuraciones de servidor FTP. Por favor configure una primero.");
-            return;
-        }
+            List<FTPConfiguration> configs = configManager.getConfigurations(username);
+            if (configs.isEmpty()) {
+                System.out.println("No tiene configuraciones de servidor FTP. Por favor configure una primero.");
+                return;
+            }
 
-        System.out.println("Seleccione un servidor para conectar:");
-        for (int i = 0; i < configs.size(); i++) {
-            FTPConfiguration config = configs.get(i);
-            System.out.printf("%d. %s:%d (%s)%n", i + 1, config.getServerAddress(), config.getPort(), config.getUsername());
-        }
-        int opcion = scanner.nextInt();
-        scanner.nextLine();
+            System.out.println("Seleccione un servidor para conectar:");
+            for (int i = 0; i < configs.size(); i++) {
+                FTPConfiguration config = configs.get(i);
+                System.out.printf("%d. %s:%d (%s)%n", i + 1, config.getServerAddress(), config.getPort(), config.getUsername());
+            }
+            int opcion = scanner.nextInt();
+            scanner.nextLine();
 
-        if (opcion < 1 || opcion > configs.size()) {
-            System.out.println("Opción no válida.");
-            return;
-        }
+            if (opcion < 1 || opcion > configs.size()) {
+                System.out.println("Opción no válida.");
+                return;
+            }
 
-        FTPConfiguration selectedConfig = configs.get(opcion - 1);
-        try {
-            FTPConnectionManager ftpManager = new FTPConnectionManager();
-            ftpManager.connect(selectedConfig.getServerAddress(), selectedConfig.getPort());
-            ftpManager.login(selectedConfig.getUsername(), selectedConfig.getPassword());
+            FTPConfiguration selectedConfig = configs.get(opcion - 1);
+            try {
+                FTPConnectionManager ftpManager = new FTPConnectionManager();
+                ftpManager.connect(selectedConfig.getServerAddress(), selectedConfig.getPort());
+                ftpManager.login(selectedConfig.getUsername(), selectedConfig.getPassword());
 
-            System.out.println("Archivos en el directorio raíz:");
-            List<String> files = ftpManager.listFiles();
-            files.forEach(System.out::println);
+                System.out.println("Archivos en el directorio raíz:");
+                ftpManager.listFiles();
 
-            ftpManager.disconnect();
-        } catch (Exception e) {
-            System.out.println("Error al conectar al servidor FTP: " + e.getMessage());
+                mostrarMenuFTP(ftpManager);
+                ftpManager.disconnect();
+            } catch (Exception e) {
+                System.out.println("Error al conectar al servidor FTP: " + e.getMessage());
+            }
+    }
+
+    private void mostrarMenuFTP(FTPConnectionManager ftpManager) {
+        while (true) {
+            System.out.println("=== Menú FTP ===");
+            System.out.println("1. Cambiar de directorio");
+            System.out.println("2. Listar archivos en el directorio actual");
+            System.out.println("3. Descargar archivo");
+            System.out.println("4. Subir archivo");
+            System.out.println("5. Crear directorio");
+            System.out.println("6. Eliminar directorio");
+            System.out.println("7. Renombrar archivo o carpeta");
+            System.out.println("8. Salir del menú FTP");
+            System.out.print("Seleccione una opción: ");
+
+            int opcion = scanner.nextInt();
+            scanner.nextLine();
+
+            try {
+                switch (opcion) {
+                    case 1: // Cambiar de directorio
+                        System.out.print("Ingrese el nombre del directorio: ");
+                        String directory = scanner.nextLine();
+                        ftpManager.changeDirectory(directory);
+                        break;
+
+                    case 2: // Listar archivos
+                        
+                        try {
+                                ftpManager.listFiles();
+                            } catch (Exception e) {
+                                System.out.println("Error al listar archivos: " + e.getMessage());
+                            }
+                            break;
+
+                    case 3: // Descargar archivo
+                        System.out.print("Ingrese la ruta del archivo remoto: ");
+                        String remoteFilePath = scanner.nextLine();
+                        System.out.print("Ingrese la ruta local donde se guardará: ");
+                        String localFilePath = scanner.nextLine();
+                        ftpManager.downloadFile(remoteFilePath, localFilePath);
+                        break;
+
+                    case 4: // Subir archivo
+                        System.out.print("Ingrese la ruta del archivo local: ");
+                        localFilePath = scanner.nextLine();
+                        System.out.print("Ingrese la ruta remota donde se subirá: ");
+                        remoteFilePath = scanner.nextLine();
+                        ftpManager.uploadFile(localFilePath, remoteFilePath);
+                        break;
+
+                    case 5: // Crear directorio
+                         System.out.print("Ingrese el nombre del nuevo directorio: ");
+                         String newDirectory = scanner.nextLine();
+                         try {
+                             ftpManager.createDirectory(newDirectory);
+                             ftpManager.changeDirectory(newDirectory); // Cambia al nuevo directorio
+                         } catch (Exception e) {
+                             System.out.println("Error al crear el directorio: " + e.getMessage());
+                         }
+                         break;
+
+                    case 6: // Eliminar directorio
+                        System.out.print("Ingrese el nombre del directorio a eliminar: ");
+                        String directoryToDelete = scanner.nextLine();
+                        ftpManager.deleteDirectory(directoryToDelete);
+                        break;
+
+                    case 7: // Renombrar archivo o carpeta
+                        System.out.print("Ingrese el nombre actual del archivo/carpeta: ");
+                        String currentName = scanner.nextLine();
+                        System.out.print("Ingrese el nuevo nombre: ");
+                        String newName = scanner.nextLine();
+                        ftpManager.rename(currentName, newName);
+                        break;
+
+                    case 8: // Salir del menú FTP
+                        System.out.println("Saliendo del menú FTP...");
+                        return;
+
+                    default:
+                        System.out.println("Opción no válida. Intente de nuevo.");
+                }
+            } catch (Exception e) {
+                System.out.println("Error: " + e.getMessage());
+            }
         }
     }
-    
+
     
 }
